@@ -1,0 +1,196 @@
+import { GoogleGenAI } from "@google/genai";
+import { AnalysisResult, NewsItem } from "../types";
+import { v4 as uuidv4 } from 'uuid';
+
+// VITE MODE: Use import.meta.env
+// Ensure you have a .env file with VITE_API_KEY=...
+const API_KEY = import.meta.env.VITE_API_KEY;
+
+const ai = new GoogleGenAI({ 
+    apiKey: API_KEY || '' 
+});
+
+// Helper to clean JSON markdown
+const cleanJson = (text: string): string => {
+  let cleaned = text.trim();
+  cleaned = cleaned.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '');
+  return cleaned.trim();
+};
+
+const extractJson = (text: string): any => {
+    let jsonStr = cleanJson(text);
+    const start = jsonStr.indexOf('[');
+    const end = jsonStr.lastIndexOf(']');
+    
+    if (start !== -1 && end !== -1) {
+      jsonStr = jsonStr.substring(start, end + 1);
+    } 
+    return JSON.parse(jsonStr);
+};
+
+// Internal fetcher for specific categories
+const fetchCategoryNews = async (
+    categoryName: string, 
+    searchQuery: string, 
+    regionCode: string
+): Promise<NewsItem[]> => {
+    if (!API_KEY) return [];
+
+    try {
+        const now = new Date();
+        const timeString = now.toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' });
+
+        const fullPrompt = `
+        当前北京时间: ${timeString}
+        
+        **极速任务**：
+        作为"金十数据"的即时快讯同步助手，请搜索 **site:jin10.com/flash OR site:cls.cn/telegraph OR site:wallstreetcn.com/live**。
+        只关注**最近 1 小时内**发生的最新金融快讯。
+        
+        **搜索目标**: ${searchQuery}
+
+        **严格要求**：
+        1. **速度第一**：无需啰嗦，直接提取最新 3-5 条关键快讯。
+        2. **格式同步**：内容风格必须像金十快讯一样简练（例如："【美国3月CPI高于预期】..."）。
+        3. **时间校准**：time 字段必须是新闻发生的北京时间 (HH:MM)。
+
+        返回 JSON (Array):
+        [
+            {
+                "time": "HH:MM",
+                "content": "【标题】内容摘要(含关键数据)",
+                "rawContent": "一句话背景补充",
+                "category": "Stock" | "Forex" | "Crypto" | "Commodity" | "Macro" | "RealEstate",
+                "importance": "High" | "Medium" | "Low",
+                "region": "${regionCode}" 
+            }
+        ]
+        `;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: fullPrompt,
+            config: {
+                tools: [{ googleSearch: {} }],
+            }
+        });
+
+        const text = response.text;
+        if (!text) return [];
+
+        let data = [];
+        try {
+            data = extractJson(text);
+        } catch (e) {
+            return [];
+        }
+
+        const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+        const sources = groundingChunks
+            .map((chunk: any) => ({
+                name: chunk.web?.title || 'Jin10/Source',
+                url: chunk.web?.uri || '#'
+            }))
+            .filter((s: any) => s.url && s.url !== '#')
+            .slice(0, 2);
+
+        return data.map((item: any) => ({
+            ...item,
+            id: uuidv4(),
+            sources: sources.length > 0 ? sources : [{ name: 'Jin10 Sync', url: 'https://www.jin10.com' }]
+        }));
+
+    } catch (error) {
+        console.error(`Error fetching ${regionCode}:`, error);
+        return [];
+    }
+};
+
+// Main export used by App.tsx
+export const fetchGlobalNews = async (): Promise<NewsItem[]> => {
+    if (!API_KEY) {
+         return [{
+            id: 'error-key',
+            time: '系统',
+            content: '未检测到 API Key，请在 .env 文件中配置 VITE_API_KEY。',
+            category: 'Macro',
+            importance: 'High',
+            region: 'SYSTEM'
+        } as any];
+    }
+
+    const tasks = [
+      {
+        query: '中国市场突发：A股 港股 人民币汇率 房地产政策',
+        region: 'CN'
+      },
+      {
+        query: '美股盘前/盘中 美联储 科技股 英伟达 特斯拉',
+        region: 'US'
+      },
+      {
+        query: '黄金(Gold) 原油 比特币(BTC) 外汇(Forex) 价格异动',
+        region: 'GLOBAL'
+      }
+    ];
+
+    const results = await Promise.allSettled(
+        tasks.map(t => fetchCategoryNews('General', t.query, t.region))
+    );
+
+    let allNews: NewsItem[] = [];
+    results.forEach(result => {
+        if (result.status === 'fulfilled') {
+            allNews = [...allNews, ...result.value];
+        }
+    });
+
+    return allNews.sort((a, b) => b.time.localeCompare(a.time));
+};
+
+export const analyzeNewsItem = async (newsItem: NewsItem): Promise<AnalysisResult> => {
+  if (!API_KEY) throw new Error("API Key Missing");
+
+  try {
+    const prompt = `
+      角色：顶级游资/机构交易员。
+      分析对象: "${newsItem.content}"
+      
+      **必须联网**：
+      1. 查该消息相关资产的 **实时现价**。
+      2. 查市场最新解读。
+
+      JSON输出 (中文):
+      {
+        "summary": "核心逻辑+实时价格。",
+        "sentimentScore": -10到10,
+        "tradingSignal": "LONG" | "SHORT" | "WAIT" | "NEUTRAL",
+        "confidence": 0-100,
+        "reasoning": ["理由1", "理由2", "理由3"],
+        "impactDuration": "Scalp" | "Intraday" | "Swing",
+        "tickers": [
+           { "symbol": "代码", "action": "买入"|"卖出"|"观望", "priceTarget": "点位" }
+        ]
+      }
+    `;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash', 
+      contents: prompt,
+      config: { tools: [{ googleSearch: {} }] }
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("No analysis");
+    
+    let jsonStr = cleanJson(text);
+    const start = jsonStr.indexOf('{');
+    const end = jsonStr.lastIndexOf('}');
+    if (start !== -1 && end !== -1) jsonStr = jsonStr.substring(start, end + 1);
+
+    return JSON.parse(jsonStr) as AnalysisResult;
+
+  } catch (error) {
+    throw error;
+  }
+};

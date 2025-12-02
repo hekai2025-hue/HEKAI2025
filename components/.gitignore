@@ -1,0 +1,25 @@
+# Node.js 依赖
+node_modules/
+
+# 构建输出
+dist/
+build/
+out/
+
+# 缓存和临时文件
+*.log
+.DS_Store
+Thumbs.db
+
+# VS Code 配置
+.vscode/
+
+# 环境变量（非常重要！）
+.env
+.env.local
+.env.development
+.env.production
+
+# 其他
+npm-debug.log*
+yarn-error.log
