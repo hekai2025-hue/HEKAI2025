@@ -2,10 +2,11 @@ import { GoogleGenAI } from "@google/genai";
 import { AnalysisResult, NewsItem } from "../types";
 import { v4 as uuidv4 } from 'uuid';
 
+// 🔐 从环境变量读取 API 密钥（安全做法）
 const apiKey = process.env.API_KEY;
 const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
-// Mock data for fallback mode (when API key is missing or network fails)
+// 📦 模拟数据（当 API Key 缺失或网络失败时使用）
 const MOCK_NEWS: NewsItem[] = [
     {
         id: 'mock-1',
@@ -46,13 +47,14 @@ const MOCK_NEWS: NewsItem[] = [
     }
 ];
 
-// Helper to clean JSON markdown
+// 🧹 清理 JSON Markdown 格式
 const cleanJson = (text: string): string => {
   let cleaned = text.trim();
   cleaned = cleaned.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '');
   return cleaned.trim();
 };
 
+// 🧩 提取 JSON 数据
 const extractJson = (text: string): any => {
     let jsonStr = cleanJson(text);
     const start = jsonStr.indexOf('[');
@@ -64,7 +66,7 @@ const extractJson = (text: string): any => {
     return JSON.parse(jsonStr);
 };
 
-// Internal fetcher for specific categories
+// 🔍 按类别获取新闻
 const fetchCategoryNews = async (
     categoryName: string, 
     searchQuery: string, 
@@ -138,13 +140,13 @@ const fetchCategoryNews = async (
 
     } catch (error) {
         console.error(`Error fetching ${regionCode}:`, error);
-        throw error; // Let the main handler switch to mock
+        throw error; // 让主处理程序切换到 mock
     }
 };
 
-// Main export used by App.tsx
+// 🌐 主导出函数：获取全球新闻
 export const fetchGlobalNews = async (): Promise<NewsItem[]> => {
-    // 1. Check if API Key exists
+    // 1. 检查 API Key 是否存在
     if (!ai) {
         console.warn("No API Key found. Using Mock Data.");
         return MOCK_NEWS;
@@ -157,7 +159,7 @@ export const fetchGlobalNews = async (): Promise<NewsItem[]> => {
           { query: '黄金(Gold) 原油 比特币(BTC) 外汇(Forex) 价格异动', region: 'GLOBAL' }
         ];
 
-        // Parallel execution
+        // 并行执行
         const results = await Promise.allSettled(
             tasks.map(t => fetchCategoryNews('General', t.query, t.region))
         );
@@ -172,13 +174,13 @@ export const fetchGlobalNews = async (): Promise<NewsItem[]> => {
             }
         });
 
-        // If ALL requests failed (likely network issue), return Mock data
+        // 如果所有请求都失败，返回模拟数据
         if (successCount === 0 && allNews.length === 0) {
             console.warn("All API requests failed (Network/VPN issue?). Using Mock Data.");
             return MOCK_NEWS;
         }
 
-        // Sort by time descending
+        // 按时间降序排序
         return allNews.sort((a, b) => b.time.localeCompare(a.time));
 
     } catch (e) {
@@ -187,10 +189,11 @@ export const fetchGlobalNews = async (): Promise<NewsItem[]> => {
     }
 };
 
+// 🤖 分析单条新闻
 export const analyzeNewsItem = async (newsItem: NewsItem): Promise<AnalysisResult> => {
   if (!ai) throw new Error("API Key Missing");
 
-  // If it's a mock item, return mock analysis
+  // 如果是模拟数据，返回模拟分析
   if (newsItem.id.startsWith('mock-')) {
       return new Promise((resolve) => {
           setTimeout(() => {
